@@ -1,4 +1,4 @@
-// $Id: dialer.cpp,v 1.86 2017/08/24 07:44:31 borja.sixto Exp $
+// $Id: dialer.cpp,v 1.97 2018/12/07 09:58:15 borja.sixto Exp $
 /*
  * GnuDialer - Complete, free predictive dialer
  *
@@ -41,7 +41,7 @@
 #include "color.h"
 
 
-#define DIALERVERSION 1.3
+#define DIALERVERSION 1.4
 #define CRASH do { fprintf(stderr, "!! Forcing immediate crash a-la abort !!\n"); *((int *)0) = 0; } while(0)
 
 #define SEPERATOR ","
@@ -156,7 +156,7 @@ const int &selectLessorOf(const int &lhs, const int &rhs)
   }
 }
 
-long int stoi(const std::string & theString)
+long int stringtoint(const std::string & theString)
 {
   return atoi(theString.c_str());
 }
@@ -468,7 +468,13 @@ int main(int argc, char **argv)
       std::cout << 
         "\t   truncate                    Remove all the phones." <<
         std::endl;
-      std::cout << 
+      std::cout <<
+        "\t   repare                      Repare DB info after an Asterisk Crash." <<
+        std::endl;
+      std::cout <<
+        "\t   config                      Generate a configuration file." <<
+        std::endl;
+      std::cout <<
         "\t   import                      Use the text file to fill the campaign." <<
         std::endl;
       std::cout << 
@@ -495,13 +501,16 @@ int main(int argc, char **argv)
       std::cout << 
         "\t   simpledump                  Dump the campaign in csv, only number and parameters." <<
         std::endl;
-      std::cout << 
+      std::cout <<
+        "\t   filter                      Filter phones from a reference table." <<
+        std::endl;
+      std::cout <<
         "\t   statistics                  Statistics od the campaign." <<
         std::endl;
       std::cout << 
         "\t--campaign                     Name of the campaign for the command." <<
         std::endl;
-      std::cout << 
+      std::cout <<
         "\t--paramater                    Parameter for the command." <<
         std::endl;
 
@@ -510,7 +519,7 @@ int main(int argc, char **argv)
     }
     if (arg == "-V" || arg == "--version" || arg == "-version")
     {
-      std::cout << "Asterisk Dialer version : "<<DIALERVERSION<<" (CVS:$Revision: 1.86 $) " << std::endl;
+      std::cout << "Asterisk Dialer version : "<<DIALERVERSION<<" (CVS:$Revision: 1.97 $) " << std::endl;
       return 0;
     }
     if (arg == "-s" || arg == "--safe" || arg == "-safe")
@@ -638,7 +647,6 @@ int main(int argc, char **argv)
   }
 
   bool gDebug, gLog;
-  addGlobalSettings("general", commandConfigurationFile);
 
   Queue TheQueueGlobals(commandConfigurationFile);
   TheQueueGlobals.ParseQueue("general");
@@ -727,6 +735,7 @@ int main(int argc, char **argv)
   unsigned int maxlines = 0, maxcaps = 10, timeout = 0, linesdialing = 0, linestodial =
     0, counter = 0, attemptsdelay = 600;
   bool ringonly = false;
+  bool unanswered = false;
   size_t  pos = 0, end = 0, pos2 = 0, end2 = 0;
   unsigned long int calls = 0;
   int timestart=0, timestop=24;
@@ -885,6 +894,34 @@ int main(int argc, char **argv)
         std::cout << "Action: TRUNCATE OK" << std::endl;
       }
     }
+
+    if (commandAction == "repare")
+    {
+      query = "UPDATE `" + commandCampaign + "` SET attempts = '0' WHERE attempts = '1' AND reason= 'Unknow'";
+
+      if (mysql_query(mysql, query.c_str()) != 0)
+      {
+        std::cout << "Error repare " << commandCampaign << "!" << std::endl;
+      }
+      else
+      {
+        std::cout << "Action: REPARE OK" << std::endl;
+      }
+    }
+
+    if (commandAction == "config")
+    {
+      QueueList TheQueues(commandConfigurationFile);
+      TheQueues.ParseQueues();
+
+      addGlobalSettings("general", commandConfigurationFile);
+      addBasicSettings(commandCampaign, commandConfigurationFile);
+
+      TheQueues.rWhere(commandCampaign).WriteConfig();
+
+      std::cout << "Action: CONFIG OK" << std::endl;
+    }
+
 
     if (commandAction == "file" || commandAction == "import")
     {
@@ -1091,6 +1128,60 @@ int main(int argc, char **argv)
           }
         } while ( (row = mysql_fetch_row(result)) );
         mysql_free_result(result);        
+      }
+    }
+
+    if (commandParameter != "")
+    if (commandAction == "filter")
+    {
+      query = "SELECT * FROM `" + commandCampaign + "`";
+      query += " WHERE phone IN (SELECT phone FROM `" + commandParameter + "`)";
+
+      if (mysql_query(mysql, query.c_str()) != 0)
+        std::cout << "Error dumping " << commandCampaign << "!" << std::endl;
+      else
+      {
+        result = mysql_store_result(mysql);
+        row = mysql_fetch_row(result);
+        rows = mysql_num_fields(result);
+
+        int count = 0;
+
+        //dump loop
+        do
+        {
+          if (row == NULL)
+            continue;
+          else
+          {
+            {
+              std::string theString;
+              std::string theDispo = "0";
+
+              theDispo = "-2";
+              theString = "disposition='-99',reason='Number filtered with " + commandParameter + "'";
+              query = "UPDATE `" + commandCampaign + "` SET " + theString + " WHERE id=" + row[0] + "";
+              if (mysql_query(mysql, query.c_str()) != 0)
+              {
+                std:: cerr << "Error Updating " << query << std::endl;
+              }
+            }
+
+            if (debug)
+            {
+              std::cout << row[1]; // Phone
+              std::cout << " filtered!"; // Phone
+              std::cout << std::endl;
+            }
+
+            count++;
+          }
+        } while ( (row = mysql_fetch_row(result)) );
+
+        std::cout << count << " phones filtered!"; // Phone
+        std::cout << std::endl;
+
+        mysql_free_result(result);
       }
     }
 
@@ -1415,7 +1506,6 @@ int main(int argc, char **argv)
       {
         std::cout << tempCheckCampaign << ": Settings Pre-Check " << std::endl;
       }
-      addBasicSettings(tempCheckCampaign, commandConfigurationFile);
 
       if (gDebug)
       {
@@ -1682,22 +1772,13 @@ int main(int argc, char **argv)
             std::system("killall Dialer");
           }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.1 " << elapsed << "us" << std::endl;
-      }
-
           //***********************************************************************************
           if (block.find("Event: OriginateResponse", 0) != std::string::npos &&
-            block.find("CallerIDName: ", 0) != std::string::npos)
+            block.find("Uniqueid: ", 0) != std::string::npos)
           {
             int iTheReason = 0;
             int iTheAttempts = 0;
-            std::string theReason, theUniqueid, theCallerIDName, theCampaign, theLeadid, theString;
+            std::string theReason, theUniqueid, theCampaign, theLeadid, theString;
             std::string theDispo = "0";
             std::string theReasonDesc = "Unknown";
 
@@ -1709,43 +1790,46 @@ int main(int argc, char **argv)
               iTheReason = atoi(theReason.c_str());
               theReasonDesc = reason2long(iTheReason);              
             }
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos && !theReason.empty())
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
+              theUniqueid = block.substr(pos, end - pos);
 
               if (block.find("~", 0) != std::string::npos)
               {
-                pos = theCallerIDName.find("~", end) + 1;
-                end = theCallerIDName.find("-", pos + 1);
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
                 pos2 = end + 1;
-                end2 = theCallerIDName.find("-", pos2);
-                theCampaign = theCallerIDName.substr(pos, end - pos);
-                theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
+                end2 = theUniqueid.find("-", pos2);
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
               }
               
-              if (block.find("Uniqueid: ", 0) != std::string::npos)
-              {
-                pos = block.find("Uniqueid: ", 0) + 10;
-                end = block.find("\n", pos);
-                theUniqueid = block.substr(pos, end - pos);
-              }
-              else
-              {
-                if (gLog)
+                if (gDebug)
                 {
-                  writeDialerLog
-                    ("OriginateSuccess - PARSE ERROR - No Uniqueid or Empty Cause (block: "
-                    + block + ")");
+                  if (doColorize)
+                  {
+                    std::
+                      cout << theCampaign << fg_green <<
+                      ": DEBUG OriginateResponse - theLeadid: " << theLeadid <<
+                      " theUniqueid: " << theUniqueid << normal <<
+                      std::endl;
+                  }
+                  else
+                  {
+                    std::
+                      cout << theCampaign << ": DEBUG OriginateResponse - theLeadid: "
+                      << theLeadid << " theUniqueid: " << theUniqueid << std::endl;
+                  }
                 }
-              }
 
-              if (!theCampaign.empty() && !theLeadid.empty() && !theUniqueid.empty() &&
+              if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {
-                TheCallCache->SetUniqueid(theCampaign, theLeadid, theUniqueid);
+                //TheCallCache->SetUniqueid(theCampaign, theLeadid, theUniqueid);
 
                 if (gDebug)
                 {
@@ -1753,30 +1837,39 @@ int main(int argc, char **argv)
                   {
                     std::
                       cout << theCampaign << fg_green <<
-                      ": OriginateSuccess - theLeadid: " << theLeadid <<
+                      ": OriginateResponse - theLeadid: " << theLeadid <<
                       " theUniqueid: " << theUniqueid << normal <<
                       std::endl;
                   }
                   else
                   {
                     std::
-                      cout << theCampaign << ": OriginateSuccess - theLeadid: "
+                      cout << theCampaign << ": OriginateResponse - theLeadid: "
                       << theLeadid << " theUniqueid: " << theUniqueid << std::endl;
                   }
-
                 }
 
                 if (gLog)
                 {
                   writeDialerLog(theCampaign +
-                    ": OriginateSuccess - theLeadid: " + theLeadid +
+                    ": OriginateResponse - theLeadid: " + theLeadid +
                     " theUniqueID: " + theUniqueid);
+                }
+              }
+              else
+              {
+                if (gLog)
+                {
+                  writeDialerLog(theCampaign +
+                    ": OriginateResponse - theLeadid: " + theLeadid +
+                    " theUniqueID: " + theUniqueid + " Not have main element to process the answer");
                 }
               }
 
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {
+
                 if (attempts > 1)
                 {
                 query = "SELECT attempts FROM `" + theCampaign + "` WHERE id=" + theLeadid + "";   
@@ -1798,6 +1891,25 @@ int main(int argc, char **argv)
                 else        
                 iTheAttempts = 0;
                 }
+
+                if (gDebug)
+                {
+                  if (doColorize)
+                  {
+                    std::
+                      cout << theCampaign << fg_green <<
+                      ": OriginateResponse - GOO theLeadid: " << theLeadid <<
+                      " theReason: " << theReason << normal <<
+                      std::endl;
+                  }
+                  else
+                  {
+                    std::
+                      cout << theCampaign << ": OriginateResponse - GOO theLeadid: "
+                      << theReason << " theReason: " << theUniqueid << std::endl;
+                  }
+                }
+
               
                 //unknown failure, disconnect
                 if (theReason == "0")
@@ -1811,7 +1923,11 @@ int main(int argc, char **argv)
                   }
                                                         
                   TheQueues.rWhere(theCampaign).IncrementDisconnects();
-                  TheCallCache->SetUnanswered(theCampaign, theLeadid);
+                  TheCallCache->SetHangup(theCampaign, theLeadid, "?");
+                  if (unanswered)
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, theReason);
+                  else
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, "");
                 }
                 // AST_CONTROL_RINGING
                 //timed out while ringing, no answer
@@ -1828,7 +1944,10 @@ int main(int argc, char **argv)
                     std::cerr << "Error Updating " << query << std::endl;
                   }                  
                   TheQueues.rWhere(theCampaign).IncrementNoanswers();
-                  TheCallCache->SetUnanswered(theCampaign, theLeadid);
+                  if (unanswered)
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, theReason);
+                  else
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, "");
                 }
                 // AST_CONTROL_BUSY
                 //busy
@@ -1842,7 +1961,10 @@ int main(int argc, char **argv)
                     std:: cerr << "Error Updating " << query << std::endl;
                   }                  
                   TheQueues.rWhere(theCampaign).IncrementBusies();
-                  TheCallCache->SetUnanswered(theCampaign, theLeadid);
+                  if (unanswered)
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, theReason);
+                  else
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, "");
                 }
                 // AST_CONTROL_HANGUP
                 //hangup, no answer
@@ -1856,7 +1978,10 @@ int main(int argc, char **argv)
                     std:: cerr << "Error Updating " << query << std::endl;
                   }                  
                   TheQueues.rWhere(theCampaign).IncrementNoanswers();
-                  TheCallCache->SetUnanswered(theCampaign, theLeadid);
+                  if (unanswered)
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, theReason);
+                  else
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, "");
                 }
                 // AST_CONTROL_CONGESTION
                 //congestion
@@ -1870,7 +1995,10 @@ int main(int argc, char **argv)
                     std:: cerr << "Error Updating " << query << std::endl;
                   }                  
                   TheQueues.rWhere(theCampaign).IncrementCongestions();
-                  TheCallCache->SetUnanswered(theCampaign, theLeadid);
+                  if (unanswered)
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, theReason);
+                  else
+                  TheCallCache->SetUnanswered(theCampaign, theLeadid, "");
                 }
                 // AST_CONTROL_ANSWERED
                 //Answered
@@ -1922,20 +2050,20 @@ int main(int argc, char **argv)
                     std::
                       cout << theCampaign << fg_light_red <<
                       ": OriginateResponse - " << theReasonDesc << " (" <<
-                      dispo2long(stoi(theDispo)) << ") " << normal << std::endl;
+                      dispo2long(stringtoint(theDispo)) << ") " << normal << std::endl;
                   }
                   else
                   {
                     std::
                       cout << theCampaign << ": OriginateResponse - " <<
-                      theReasonDesc << " (" << dispo2long(stoi(theDispo)) << ") " <<
+                      theReasonDesc << " (" << dispo2long(stringtoint(theDispo)) << ") " <<
                       std::endl;
                   }
                   }
                 }
 
                 //stats testing
-                TheQueues.rWhere(theCampaign).WriteAbn();
+                //TheQueues.rWhere(theCampaign).WriteAbn();
 
                 if (gDebug)
                 {
@@ -1945,7 +2073,7 @@ int main(int argc, char **argv)
                       cout << theCampaign << fg_light_green <<
                       ": OriginateResponse - theLeadid: " << theLeadid <<
                       " theReasonDesc: " << theReasonDesc << " theDispo: " << theDispo
-                      << " (" << dispo2long(stoi(theDispo)) << ") " << normal <<
+                      << " (" << dispo2long(stringtoint(theDispo)) << ") " << normal <<
                       std::endl;
                   }
                   else
@@ -1954,7 +2082,7 @@ int main(int argc, char **argv)
                       cout << theCampaign << ": OriginateResponse - theLeadid: "
                       << theLeadid << " theReasonDesc: " << theReasonDesc <<
                       " theDispo: " << theDispo << " (" <<
-                      dispo2long(stoi(theDispo)) << ") " << std::endl;
+                      dispo2long(stringtoint(theDispo)) << ") " << std::endl;
                   }
 
                 }
@@ -1990,28 +2118,19 @@ int main(int argc, char **argv)
               if (gLog)
               {
                 writeDialerLog
-                  ("OriginateResponse - PARSE ERROR - No CallerIDName or Empty Reason (block: \n"
+                  ("OriginateResponse - PARSE ERROR - No Uniqueid or Empty Reason (block: \n"
                   + block + ")");
               }
             }
           }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.2 " << elapsed << "us" << std::endl;
-      }
-
           //***********************************************************************************
           if (block.find("Event: OriginateFailure", 0) != std::string::npos &&
-            block.find("CallerIDName: ", 0) != std::string::npos)
+            block.find("Uniqueid: ", 0) != std::string::npos)
           {
             int iTheReason = 0;
             int iTheAttempts = 0;
-            std::string theReason, theCallerIDName, theCampaign, theLeadid, theString;
+            std::string theReason, theUniqueid, theCampaign, theLeadid, theString;
             std::string theDispo = "0";
             std::string theReasonDesc = "Unknown";
 
@@ -2023,22 +2142,25 @@ int main(int argc, char **argv)
               iTheReason = atoi(theReason.c_str());
               theReasonDesc = reason2long(iTheReason);
             }
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos && !theReason.empty())
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
+              theUniqueid = block.substr(pos, end - pos);
 
               if (block.find("~", 0) != std::string::npos)
               {
-                pos = theCallerIDName.find("~", end) + 1;
-                end = theCallerIDName.find("-", pos + 1);
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
                 pos2 = end + 1;
-                end2 = theCallerIDName.find("-", pos2);
-                theCampaign = theCallerIDName.substr(pos, end - pos);
-                theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
+                end2 = theUniqueid.find("-", pos2);
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
               }
+
+
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {
@@ -2163,19 +2285,19 @@ int main(int argc, char **argv)
                     std::
                       cout << theCampaign << fg_light_red <<
                       ": OriginateFailure - " << theReason << " (" <<
-                      dispo2long(stoi(theDispo)) << ") " << normal << std::endl;
+                      dispo2long(stringtoint(theDispo)) << ") " << normal << std::endl;
                   }
                   else
                   {
                     std::
                       cout << theCampaign << ": OriginateFailure - " <<
-                      theReason << " (" << dispo2long(stoi(theDispo)) << ") " <<
+                      theReason << " (" << dispo2long(stringtoint(theDispo)) << ") " <<
                       std::endl;
                   }
                 }
 
                 //stats testing
-                TheQueues.rWhere(theCampaign).WriteAbn();
+                //TheQueues.rWhere(theCampaign).();
 
                 if (gDebug)
                 {
@@ -2185,7 +2307,7 @@ int main(int argc, char **argv)
                       cout << theCampaign << fg_light_green <<
                       ": OriginateFailure - theLeadid: " << theLeadid <<
                       " theReason: " << theReason << " theDispo: " << theDispo
-                      << " (" << dispo2long(stoi(theDispo)) << ") " << normal <<
+                      << " (" << dispo2long(stringtoint(theDispo)) << ") " << normal <<
                       std::endl;
                   }
                   else
@@ -2194,7 +2316,7 @@ int main(int argc, char **argv)
                       cout << theCampaign << ": OriginateFailure - theLeadid: "
                       << theLeadid << " theReason: " << theReason <<
                       " theDispo: " << theDispo << " (" <<
-                      dispo2long(stoi(theDispo)) << ") " << std::endl;
+                      dispo2long(stringtoint(theDispo)) << ") " << std::endl;
                   }
 
                 }
@@ -2230,30 +2352,20 @@ int main(int argc, char **argv)
               if (gLog)
               {
                 writeDialerLog
-                  ("OriginateFailure - PARSE ERROR - No CallerIDName or Empty Reason (block: \n"
+                  ("OriginateFailure - PARSE ERROR - No Uniqueid or Empty Reason (block: \n"
                   + block + ")");
               }
             }
           }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.3 " << elapsed << "us" << std::endl;
-      }
-
-
           //***********************************************************************************
           if (block.find("Event: OriginateSuccess", 0) != std::string::npos &&
-            block.find("CallerIDName: ", 0) != std::string::npos)
+            block.find("Uniqueid: ", 0) != std::string::npos)
           if (!clip)
           {
             int iTheReason = 0;
             int iTheAttempts = 0;
-            std::string theReason, theUniqueid, theCallerIDName, theCampaign, theLeadid, theString;
+            std::string theReason, theUniqueid, theCampaign, theLeadid, theString;
             std::string theDispo = "-3";
             std::string theReasonDesc = "Unknown";
                         
@@ -2266,43 +2378,26 @@ int main(int argc, char **argv)
               theReasonDesc = reason2long(iTheReason);
             }
             
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos && !theReason.empty())
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
+              theUniqueid = block.substr(pos, end - pos);
 
               if (block.find("~", 0) != std::string::npos)
               {
-                pos = theCallerIDName.find("~", end) + 1;
-                end = theCallerIDName.find("-", pos + 1);
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
 
                 pos2 = end + 1;
-                end2 = theCallerIDName.find("-", pos2);
+                end2 = theUniqueid.find("-", pos2);
 
-                theCampaign = theCallerIDName.substr(pos, end - pos);
-                theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
               }
 
-
-              if (block.find("Uniqueid: ", 0) != std::string::npos)
-              {
-                pos = block.find("Uniqueid: ", 0) + 10;
-                end = block.find("\n", pos);
-                theUniqueid = block.substr(pos, end - pos);
-              }
-              else
-              {
-                if (gLog)
-                {
-                  writeDialerLog
-                    ("OriginateSuccess - PARSE ERROR - No Uniqueid or Empty Cause (block: "
-                    + block + ")");
-                }
-              }
-
-              if (!theCampaign.empty() && !theLeadid.empty() && !theUniqueid.empty() &&
+              if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {
                 TheCallCache->SetUniqueid(theCampaign, theLeadid, theUniqueid);
@@ -2471,7 +2566,7 @@ int main(int argc, char **argv)
                 }
 
                 //stats testing
-                TheQueues.rWhere(theCampaign).WriteAbn();
+                //TheQueues.rWhere(theCampaign).WriteAbn();
 
                 if (gDebug)
                 {
@@ -2481,7 +2576,7 @@ int main(int argc, char **argv)
                       cout << theCampaign << fg_green <<
                       ": OriginateSuccess - theLeadid: " << theLeadid <<
                       " theReason: " << theReason << " theDispo: " << theDispo
-                      << " (" << dispo2long(stoi(theDispo)) << ") " << normal <<
+                      << " (" << dispo2long(stringtoint(theDispo)) << ") " << normal <<
                       std::endl;
                   }
                   else
@@ -2490,7 +2585,7 @@ int main(int argc, char **argv)
                       cout << theCampaign << ": OriginateSuccess - theLeadid: "
                       << theLeadid << " theReason: " << theReason <<
                       " theDispo: " << theDispo << " (" <<
-                      dispo2long(stoi(theDispo)) << ") " << std::endl;
+                      dispo2long(stringtoint(theDispo)) << ") " << std::endl;
                   }
 
                 }
@@ -2526,46 +2621,35 @@ int main(int argc, char **argv)
               if (gLog)
               {
                 writeDialerLog
-                  ("OriginateSuccess - PARSE ERROR - No CallerIDName or Empty Reason (block: \n"
+                  ("OriginateSuccess - PARSE ERROR - No Uniqueid or Empty Reason (block: \n"
                   + block + ")");
               }
             }
           }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.4 " << elapsed << "us" << std::endl;
-      }
-
-
           //***********************************************************************************
           if (block.find("Event: Newstate", 0) != std::string::npos &&
-            block.find("CallerIDName: ", 0) != std::string::npos && 
-            block.find("Uniqueid: ", 0) != std::string::npos) 
+            block.find("Uniqueid: ", 0) != std::string::npos)
           {
-            std::string theUniqueid, theCallerIDName, theCampaign, theLeadid;
+            std::string theUniqueid, theCampaign, theLeadid;
 
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos)
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
+              theUniqueid = block.substr(pos, end - pos);
 
               if (block.find("~", 0) != std::string::npos)
               {
-                pos = theCallerIDName.find("~", end) + 1;
-                end = theCallerIDName.find("-", pos + 1);
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
 
                 pos2 = end + 1;
-                end2 = theCallerIDName.find("-", pos2);
+                end2 = theUniqueid.find("-", pos2);
 
-                theCampaign = theCallerIDName.substr(pos, end - pos);
-                theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
               }
             }          
             else
@@ -2573,7 +2657,7 @@ int main(int argc, char **argv)
               if (gLog)
               {
                 writeDialerLog
-                  ("Newevent - No CallerIDName (block: \n"
+                  ("Newevent - No Uniqueid (block: \n"
                   + block + ")");
               }
             }
@@ -2632,19 +2716,8 @@ int main(int argc, char **argv)
 
           }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.4.1 " << elapsed << "us" << std::endl;
-      }
-
 
           //***********************************************************************************
-          //if (block.find("Event: Hangup", 0) != std::string::npos &&
-          //  block.find("CallerIDName: ", 0) != std::string::npos)
           if (block.find("Event: Hangup", 0) != std::string::npos &&
             block.find("Cause: ", 0) != std::string::npos)
           //if (!clip)
@@ -2652,9 +2725,11 @@ int main(int argc, char **argv)
             //if (block.find("Event: OriginateSuccess",0) != std::string::npos) {
             int iTheCause = 0;
             int iTheAttempts = 0;            
-            std::string theCause, theCallerIDName, theCampaign, theLeadid, theUniqueid, theString, theAttempts;
+            std::string theCause, theCauseTxt, theCampaign, theLeadid, theUniqueid, theString, theAttempts;
             if (block.find("Cause: ", 0) != std::string::npos)
             {
+              // The cause Mapping https://wiki.asterisk.org/wiki/display/AST/Hangup+Cause+Mappings
+
               pos = block.find("Cause: ", 0) + 7;
               end = block.find("\n", pos);
               theCause = block.substr(pos, end - pos);
@@ -2663,34 +2738,38 @@ int main(int argc, char **argv)
               writeDialerLog
                 ("Hangup - TheCause="+theCause);
 
-                if (gDebug)
-                {
-                  std::cout << "TheCause " << iTheCause << std::endl;
-                }
+              writeDialerLog
+                ("DBG Hangup - No ActionID (block: \n"
+                + block + ")");
+
+              if (gDebug)
+              {
+                std::cout << "TheCause " << iTheCause << std::endl;
+              }
             }
             if (block.find("Cause-txt: ", 0) != std::string::npos)
             {
               pos = block.find("Cause-txt: ", 0) + 11;
               end = block.find("\n", pos);
-              theCause = block.substr(pos, end - pos);
+              theCauseTxt = block.substr(pos, end - pos);
             }
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos && !theCause.empty())
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
+              theUniqueid = block.substr(pos, end - pos);
 
               if (block.find("~", 0) != std::string::npos)
               {
-                pos = theCallerIDName.find("~", end) + 1;
-                end = theCallerIDName.find("-", pos + 1);
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
 
                 pos2 = end + 1;
-                end2 = theCallerIDName.find("-", pos2);
+                end2 = theUniqueid.find("-", pos2);
 
-                theCampaign = theCallerIDName.substr(pos, end - pos);
-                theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
 
                 writeDialerLog
                   ("Hangup - theLeadid="+theLeadid);
@@ -2702,7 +2781,7 @@ int main(int argc, char **argv)
               else
               {
                 writeDialerLog
-                  ("Hangup - PARSE ERROR - CallerIDName invalid");
+                  ("Hangup - PARSE ERROR - Uniqueid invalid");
               }
 
             }
@@ -2711,33 +2790,7 @@ int main(int argc, char **argv)
               if (gLog)
               {
                 writeDialerLog
-                  ("Hangup - No CallerIDName (block: \n"
-                  + block + ")");
-              }
-            }
-            
-            if (block.find("Uniqueid: ", 0) != std::string::npos && 
-              //theCallerIDName.empty())
-              theLeadid.empty())
-            {
-              pos = block.find("Uniqueid: ", 0) + 10;
-              end = block.find("\n", pos);
-              theUniqueid = block.substr(pos, end - pos);
-
-                writeDialerLog
-                  ("Hangup - Uniqueid = "
-                  + theUniqueid + "");
-
-              
-              theCampaign = TheCallCache->GetCampaign(theUniqueid);
-              theLeadid = TheCallCache->GetLeadId(theUniqueid);              
-            }
-            else
-            {
-              if (gLog)
-              {
-                writeDialerLog
-                  ("Hangup - PARSE ERROR - No Uniqueid (block: \n"
+                  ("Hangup - No ActionID (block: \n"
                   + block + ")");
               }
             }
@@ -2746,16 +2799,6 @@ int main(int argc, char **argv)
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.4.2 " << elapsed << "us" << std::endl;
-      }
-
                 if (attempts > 1)
                 {
                 query = "SELECT attempts FROM `" + theCampaign + "` WHERE id=" + theLeadid + "";   
@@ -2776,19 +2819,11 @@ int main(int argc, char **argv)
                 iTheAttempts = 0;
                 }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.4.3 " << elapsed << "us" << std::endl;
-      }
                 // answer, we'll assume voicemail/answering machine
                 // if it passes talkdetect it will be sent to agent
                 // or abandons++                             
                 
-                theString = "cause='" + theCause +"'";
+                theString = "cause='" + theCauseTxt +"'";
                 
                 query = "UPDATE `" + theCampaign + "` SET " + theString + " WHERE id=" + theLeadid + "";     
                 if (mysql_query(mysql, query.c_str()) != 0)
@@ -2796,10 +2831,13 @@ int main(int argc, char **argv)
                   std:: cerr << "Error Updating" << std::endl;
                 } 
 
-                TheCallCache->RemoveCall(theCampaign, theLeadid);
+                if (unanswered)
+                TheCallCache->SetHangup(theCampaign, theLeadid, theCause);
+                else
+                TheCallCache->SetHangup(theCampaign, theLeadid, "");
 
                 //stats testing
-                TheQueues.rWhere(theCampaign).WriteAbn();
+                //TheQueues.rWhere(theCampaign).WriteAbn();
 
                 if (gDebug)
                 {
@@ -2878,65 +2916,61 @@ int main(int argc, char **argv)
             
           }
           
-          
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.5 " << elapsed << "us" << std::endl;
-      }
-
           //***********************************************************************************
           if ((block.find("Event: UserEventPickup", 0) != std::string::npos) ||
             (block.find("UserEvent: Pickup", 0) != std::string::npos))
           if (!clip)
           {
-            std::string theCallerIDName, theCampaign, theLeadid, theString;
+            std::string theUniqueid, theCampaign, theLeadid, theString;
             DBG_TRACE(DBG_ASTERISK, (0, "< Event: UserEventPickup detected !"));
             if (gDebug)
             {
               std::cout << "UserEvent - Pickup ";
             }
 
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos)
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
-              DBG_TRACE(DBG_ASTERISK, (0, "theCallerIDName : %s",
-                  theCallerIDName.c_str()));
+              theUniqueid = block.substr(pos, end - pos);
 
-              pos = theCallerIDName.find("~", end) + 1;
-              end = theCallerIDName.find("-", pos + 1);
-
-              pos2 = end + 1;
-              end2 = theCallerIDName.find("-", pos2);
-
-              theCampaign = theCallerIDName.substr(pos, end - pos);
-              if (gDebug)
+              if (block.find("~", 0) != std::string::npos)
               {
-                std::cout << " theCampaign: " << theCampaign;
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
+
+                pos2 = end + 1;
+                end2 = theUniqueid.find("-", pos2);
+
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
+
+                writeDialerLog
+                  ("UserEventPickup - theLeadid="+theLeadid);
+                writeDialerLog
+                  ("UserEventPickup - theCampaign"+theCampaign);
+
+
+              }
+              else
+              {
+                writeDialerLog
+                  ("UserEventPickup - PARSE ERROR - Uniqueid invalid");
               }
 
-              DBG_TRACE(DBG_ASTERISK, (0, "theCampaign: %s",
-                  theCampaign.c_str()));
-
-              theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
-              if (gDebug)
+            }
+            else
+            {
+              if (gLog)
               {
-                std::cout << " theLeadid: " << theLeadid;
+                writeDialerLog
+                  ("UserEventPickup - No Uniqueid (block: \n"
+                  + block + ")");
               }
+            }
 
-              DBG_TRACE(DBG_ASTERISK, (0, "theLeadid: %s", theLeadid.c_str()));
-
-              if (gDebug)
-              {
-                std::cout << std::endl;
-              }
-
+            {
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {                                                          
@@ -2971,64 +3005,61 @@ int main(int argc, char **argv)
             }
           }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.6 " << elapsed << "us" << std::endl;
-      }
-
-
           //***********************************************************************************
           if ((block.find("Event: UserEventHangup", 0) != std::string::npos) ||
             (block.find("UserEvent: Hangup", 0) != std::string::npos))
           if (!clip)
           {
-            std::string theCallerIDName, theCampaign, theDuration, theResult, theLeadid, theString;
+            std::string theUniqueid, theCampaign, theDuration, theResult, theLeadid, theString;
             DBG_TRACE(DBG_ASTERISK, (0, "< Event: UserEventHangup detected !"));
             if (gDebug)
             {
-              std::cout << "UserEvent - Hangup ";
+              std::cout << "UserEvent - Hangup\n\r";
             }
 
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos)
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
-              DBG_TRACE(DBG_ASTERISK, (0, "theCallerIDName : %s",
-                  theCallerIDName.c_str()));
+              theUniqueid = block.substr(pos, end - pos);
 
-              pos = theCallerIDName.find("~", end) + 1;
-              end = theCallerIDName.find("-", pos + 1);
-
-              pos2 = end + 1;
-              end2 = theCallerIDName.find("-", pos2);
-
-              theCampaign = theCallerIDName.substr(pos, end - pos);
-              if (gDebug)
+              if (block.find("~", 0) != std::string::npos)
               {
-                std::cout << " theCampaign: " << theCampaign;
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
+
+                pos2 = end + 1;
+                end2 = theUniqueid.find("-", pos2);
+
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
+
+                writeDialerLog
+                  ("UserEventHangup - theLeadid="+theLeadid);
+                writeDialerLog
+                  ("UserEventHangup - theCampaign"+theCampaign);
+
+
+              }
+              else
+              {
+                writeDialerLog
+                  ("UserEventHangup - PARSE ERROR - Uniqueid invalid");
               }
 
-              DBG_TRACE(DBG_ASTERISK, (0, "theCampaign: %s",
-                  theCampaign.c_str()));
-
-              theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
-              if (gDebug)
+            }
+            else
+            {
+              if (gLog)
               {
-                std::cout << " theLeadid: " << theLeadid;
+                writeDialerLog
+                  ("UserEventHangup - No Uniqueid (block: \n"
+                  + block + ")");
               }
+            }
 
-              DBG_TRACE(DBG_ASTERISK, (0, "theLeadid: %s", theLeadid.c_str()));
-
-              if (gDebug)
-              {
-                std::cout << std::endl;
-              }
+            {
 
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
@@ -3104,65 +3135,61 @@ int main(int argc, char **argv)
             }            
           }
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.7 " << elapsed << "us" << std::endl;
-      }
-
-          
           //***********************************************************************************
           if ((block.find("Event: UserEventAction", 0) != std::string::npos) ||
             (block.find("UserEvent: Action", 0) != std::string::npos))
           if (!clip)
           {
-            std::string theCallerIDName, theCampaign, theDuration, theResult, theLeadid, theString;
+            std::string theUniqueid, theCampaign, theDuration, theResult, theLeadid, theString;
             DBG_TRACE(DBG_ASTERISK, (0, "< Event: UserEventAction detected !"));
             if (gDebug)
             {
               std::cout << "UserEvent - Action ";
             }
 
-            if (block.find("CallerIDName: ", 0) != std::string::npos &&
+            if (block.find("Uniqueid: ", 0) != std::string::npos &&
               block.find("~", 0) != std::string::npos)
             {
-              pos = block.find("CallerIDName: ", 0) + 15;
+              pos = block.find("Uniqueid: ", 0) + 11;
               end = block.find("\n", pos);
-              theCallerIDName = block.substr(pos, end - pos);
-              DBG_TRACE(DBG_ASTERISK, (0, "theCallerIDName : %s",
-                  theCallerIDName.c_str()));
+              theUniqueid = block.substr(pos, end - pos);
 
-              pos = theCallerIDName.find("~", end) + 1;
-              end = theCallerIDName.find("-", pos + 1);
-
-              pos2 = end + 1;
-              end2 = theCallerIDName.find("-", pos2);
-
-              theCampaign = theCallerIDName.substr(pos, end - pos);
-              if (gDebug)
+              if (block.find("~", 0) != std::string::npos)
               {
-                std::cout << " theCampaign: " << theCampaign;
+                pos = theUniqueid.find("~", end) + 1;
+                end = theUniqueid.find("-", pos + 1);
+
+                pos2 = end + 1;
+                end2 = theUniqueid.find("-", pos2);
+
+                theCampaign = theUniqueid.substr(pos, end - pos);
+                theLeadid = theUniqueid.substr(pos2, end2 - pos2);
+
+                writeDialerLog
+                  ("UserEventAction - theLeadid="+theLeadid);
+                writeDialerLog
+                  ("UserEventAction - theCampaign"+theCampaign);
+
+
+              }
+              else
+              {
+                writeDialerLog
+                  ("UserEventAction - PARSE ERROR - Uniqueid invalid");
               }
 
-              DBG_TRACE(DBG_ASTERISK, (0, "theCampaign: %s",
-                  theCampaign.c_str()));
-
-              theLeadid = theCallerIDName.substr(pos2, end2 - pos2);
-              if (gDebug)
+            }
+            else
+            {
+              if (gLog)
               {
-                std::cout << " theLeadid: " << theLeadid;
+                writeDialerLog
+                  ("UserEventAction - No Uniqueid (block: \n"
+                  + block + ")");
               }
+            }
 
-              DBG_TRACE(DBG_ASTERISK, (0, "theLeadid: %s", theLeadid.c_str()));
-
-              if (gDebug)
-              {
-                std::cout << std::endl;
-              }
-
+            {
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {
@@ -3196,15 +3223,6 @@ int main(int argc, char **argv)
               }
             }            
           }
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1.8 " << elapsed << "us" << std::endl;
-      }
 
           //***********************************************************************************
           // End block analysis
@@ -3295,6 +3313,7 @@ int main(int argc, char **argv)
           orderby = TheQueues.at(i).GetSetting("orderby").Get();
           attemptsdelay = TheQueues.at(i).GetSetting("attemptsdelay").GetInt();
           ringonly = TheQueues.at(i).GetSetting("ringonly").GetBool();
+          unanswered = TheQueues.at(i).GetSetting("unanswered").GetBool();
 
           extravars.clear();
 
@@ -3544,17 +3563,6 @@ int main(int argc, char **argv)
             }
             else
             {
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK1 " << elapsed << "us" << std::endl;
-      }
-
-
               if (gDebug)
               {
                 gettimeofday(&tv_sql, NULL);
@@ -3564,7 +3572,6 @@ int main(int argc, char **argv)
                 std::cout << "MYSQL Query " << query << std::endl;
                 std::cout << "MYSQL Query " << elapsed << "us" << std::endl;
               }
-
 
               result = mysql_use_result(mysql);              
               query = "UPDATE `" + queue + "` SET attempts=attempts+1,datetime=CURRENT_TIMESTAMP WHERE ";
@@ -3599,30 +3606,10 @@ int main(int argc, char **argv)
                   else
                   caller = (char*)callerid.c_str();
 
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK2.1 " << elapsed << "us" << std::endl;
-      }
-
-                  
                   TheCallCache->AddCall(queue, row[0], row[1], url, row[2],
                     timeout, dialformat, caller,
                     mode, 
                     extravars);
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK2.2 " << elapsed << "us" << std::endl;
-      }
-
                 }
               }
 
@@ -3672,22 +3659,12 @@ int main(int argc, char **argv)
               if (added)
               {
                 TheQueues.rWhere(queue).AddCallsDialed(counter);
-                TheQueues.rWhere(queue).WriteCalls();
+                //TheQueues.rWhere(queue).WriteCalls();
 	            if (gDebug)
 	            {
                   std::cout << queue << ": JobToDo " << JobToDo << std::endl;
                   std::cout << queue << ": query - " << query << std::endl;
 	            }
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK2.3 " << elapsed << "us" << std::endl;
-      }
-
 
                 if (mysql_query(mysql, query.c_str()) != 0)
                 {
@@ -3696,16 +3673,6 @@ int main(int argc, char **argv)
                     endl;
                   return 1;
                 }
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK2.4 " << elapsed << "us" << std::endl;
-      }
-
               }
             }
           }
@@ -3715,15 +3682,6 @@ int main(int argc, char **argv)
            if (gDebug)
            std::cout << queue << ": Queue not active!" << std::endl;
 	}
-      }
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK2 " << elapsed << "us" << std::endl;
       }
 
       try
@@ -3740,15 +3698,6 @@ int main(int argc, char **argv)
         std::cerr << "Exception: Unable to fork the parent process!" << std::
           endl;
         return 1;
-      }
-
-      if (gDebug)
-      {
-        gettimeofday(&tv_recv, NULL);
-
-        long elapsed = (tv_recv.tv_sec-tv_lastrecv.tv_sec)*1000000 + tv_recv.tv_usec-tv_lastrecv.tv_usec;
-
-        std::cout << "READ AsteriskManager MARK3 " << elapsed << "us" << std::endl;
       }
 
       if (!daemonMode)

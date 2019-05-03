@@ -22,6 +22,7 @@
 #include "exceptions.h"
 #include "Socket.h"
 #include "itos.h"
+#include "time.h"
 
 #ifndef CALL
 #define CALL
@@ -29,6 +30,8 @@
 const bool doColor = true;
 const std::string neon = "\033[1;32m";  // set foreground color to light green
 const std::string norm = "\033[0m"; // reset to system
+
+static unsigned int counter = 0;
 
 class Call;
 std::string workingCampaign;
@@ -148,9 +151,10 @@ public:
     itsTimeout = 0;    
   }
 
-  void SetUnanswered()
+  void SetUnanswered(const std::string & value)
   {
     unanswered = true;
+    reason = value;
   }
 
   const bool & HasBeenUnanswered() const
@@ -158,9 +162,10 @@ public:
     return unanswered;
   }
   
-  void SetHangup()
+  void SetHangup(const std::string & value)
   {
     hangup = true;
+    cause = value;
   }
 
   const bool & HasBeenHangup() const
@@ -170,10 +175,13 @@ public:
   
   void DoCall(const std::string & mainHost)
   {
-
     std::string response, request;
+    char uniqueid[20];
+
+    sprintf(uniqueid, "%li.%d", time(NULL), counter++);
 
     called = true;
+    host = mainHost;
 
     timeval tv;
     gettimeofday(&tv, NULL);
@@ -296,8 +304,8 @@ public:
       request = request + "Async: true\r\n";
       request = request + "Timeout: " + itos(itsTimeout) + "\r\n";
 
-      request = request + "Variable: __CALLERIDNAME=~" + itsCampaign + "-" +
-        itsLeadId + "-" + itsNumber + "~\r\n";
+      //request = request + "Variable: __CALLERIDNAME=~" + itsCampaign + "-" +
+      //  itsLeadId + "-" + itsNumber + "~\r\n";
 
       if (itsCallerId != "")
       {
@@ -340,14 +348,25 @@ public:
           }
         }
 
+        request = request + "CallerID: " + itsCallerId  + "<" + itsCallerId + ">\r\n";
 
-        request = request + "CallerID: ~" + itsCampaign + "-" + itsLeadId + "-" +
-          itsNumber  + "~<" + itsCallerId + ">\r\n";
+        //request = request + "ActionID: ~" + itsCampaign + "-" + itsLeadId + "-" +
+        //  itsNumber  + "~\r\n";
+        request = request + "ChannelId: ~" + itsCampaign + "-" + itsLeadId + "-" +
+          itsNumber  + "~";
+        request = request + uniqueid;
+        request = request + +"\r\n";
       }
       else
       {
-        request = request + "CallerID: ~" + itsCampaign + "-" + itsLeadId + "-" +
-          itsNumber + "~<" + itsCallerId + ">\r\n";
+        //request = request + "CallerID: ~" + itsCampaign + "-" + itsLeadId + "-" +
+        //  itsNumber + "~<" + itsCallerId + ">\r\n";
+        //request = request + "ActionID: ~" + itsCampaign + "-" + itsLeadId + "-" +
+        //  itsNumber + "~\r\n";
+        request = request + "ChannelId: ~" + itsCampaign + "-" + itsLeadId + "-" +
+          itsNumber  + "~";
+        request = request + uniqueid;
+        request = request + +"\r\n";
       }
 
       request = request + "\r\n";
@@ -393,6 +412,114 @@ public:
 
   }
 
+  void DoRequest()
+  {
+    std::string response, request;
+    char uniqueid[20];
+
+    sprintf(uniqueid, "%li.%d", time(NULL), counter++);
+
+    const std::string mainHost = host;
+
+    timeval tv;
+    gettimeofday(&tv, NULL);
+    itsTime = tv.tv_sec % 1000000;
+
+    if (1)
+    std::cout << "REQUEST: " << itsNumber << " now !!!"  << std::endl;
+
+    signal(SIGCLD, SIG_IGN);
+    sigignore(SIGPIPE);
+
+    int pid = fork();
+
+    if (pid == 0)
+    {
+      usleep(5000);
+      usleep(rand()%500000);
+
+      ClientSocket AsteriskManager(getMainHost(), atoi(getMainPort().c_str()));
+
+      response = AsteriskManager.recv();
+
+      request =  "Action: Login\r\nUserName: " +
+        getManagerUsername() +
+        "\r\nSecret: " + getManagerPassword() + "\r\nEvents: off\r\n\r\n";
+      AsteriskManager.send(request);
+
+      response = AsteriskManager.recv();
+
+      if (itsCallerId == "called")
+      {
+        itsCallerId = itsNumber;
+      }
+
+      request = "Action: Command\r\n";
+
+      std::cout << "VXML URL: " << itsUrl << std::endl;
+      std::cout << "VXML MODE: " << itsMode << std::endl;
+
+      if ((itsMode == "VOXIMAL") || (itsMode == "voximal") || (itsMode == "videovoximal"))
+      {
+        request = request + "Command: voximal function VOXIMAL(url,";
+        request = request + itsUrl + ",";
+        request = request + cause + ":" + reason +",";
+        request = request + itsParam + ",";
+        request = request + itsCallerId + ",";
+        request = request + itsNumber + ",";
+        request = request + "mark";
+        request = request + ")\r\n";
+
+        /*
+        if (itsUrl.empty() || (itsUrl == "None") || (itsUrl == "none"))
+        request = request + "Data: " + itsCallerId + "\r\n";
+        else
+        request = request + "Data: " + itsUrl + "\r\n";
+        */
+      }
+
+      request = request + "\r\n";
+
+      //std::cout << "!!! DBG " << request << std::endl;
+
+      AsteriskManager.send(request);
+
+      response = AsteriskManager.recv();
+
+      request = "Action: Logoff\r\n\r\n";
+      AsteriskManager.send(request);
+
+      response = AsteriskManager.recv();
+
+      if (doColor)
+      {
+        if (0)
+        std::cout << mainHost << neon << ": " + itsCampaign + " - " +
+          itsNumber + " - " + itsLeadId + " - " +
+          "" << norm << std::endl;
+      }
+      else
+      {
+        if (0)
+        std::cout << mainHost << ": " + itsCampaign + " - " + itsNumber +
+          " - " + itsLeadId + " - " + "" << std::endl;
+      }
+
+			usleep(50000);
+
+      exit(0);
+
+    }
+
+    if (pid == -1)
+    {
+
+      throw xForkError();
+
+    }
+
+  }
+
   ~Call()
   {
   }
@@ -408,7 +535,9 @@ private:
   unsigned long int itsTime;
   unsigned short int itsTimeout;
   bool called, answered, unanswered, hangup;
-
+  std::string cause;
+  std::string reason;
+  std::string host;
 };
 
 class CallCache
@@ -496,23 +625,6 @@ public:
     return itsEmpty;
   }
   
-  void RemoveCall(const std::string & campaign, const std::string & leadid)
-  {
-    for (unsigned int i = 0; i < itsCalls.size(); i++)
-    {
-
-      if (itsCalls.at(i).GetCampaign() == campaign &&
-        itsCalls.at(i).GetLeadId() == leadid)
-
-      {
-        if (itsCalls.at(i).HasBeenAnswered() || itsCalls.at(i).HasBeenUnanswered())
-        itsCalls.erase(itsCalls.begin()+i);
-        else
-        itsCalls.at(i).SetHangup();
-      }
-    }
-  }
-
   void SetAnswered(const std::string & campaign, const std::string & leadid)
   {
     for (unsigned int i = 0; i < itsCalls.size(); i++)
@@ -526,7 +638,7 @@ public:
     }
   }
 
-  void SetUnanswered(const std::string & campaign, const std::string & leadid)
+  void SetUnanswered(const std::string & campaign, const std::string & leadid, const std::string & reason)
   {
     for (unsigned int i = 0; i < itsCalls.size(); i++)
     {
@@ -534,10 +646,46 @@ public:
       if (itsCalls.at(i).GetCampaign() == campaign &&
         itsCalls.at(i).GetLeadId() == leadid)
       {
-        if (itsCalls.at(i).HasBeenHangup())        
-        itsCalls.erase(itsCalls.begin()+i);
-        else        
-        itsCalls.at(i).SetUnanswered();        
+        if (itsCalls.at(i).HasBeenHangup())
+        {
+          itsCalls.at(i).SetUnanswered(reason);
+          if (!reason.empty())
+          itsCalls.at(i).DoRequest();
+          itsCalls.erase(itsCalls.begin()+i);
+        }
+        else
+        {
+          itsCalls.at(i).SetUnanswered(reason);
+        }
+      }
+    }
+  }
+
+  void SetHangup(const std::string & campaign, const std::string & leadid, const std::string & cause)
+  {
+    for (unsigned int i = 0; i < itsCalls.size(); i++)
+    {
+
+      if (itsCalls.at(i).GetCampaign() == campaign &&
+        itsCalls.at(i).GetLeadId() == leadid)
+      {
+        if (itsCalls.at(i).HasBeenAnswered())
+        {
+          itsCalls.at(i).SetHangup(cause);
+          itsCalls.erase(itsCalls.begin()+i);
+        }
+        else
+        if (itsCalls.at(i).HasBeenUnanswered())
+        {
+          itsCalls.at(i).SetHangup(cause);
+          if (!cause.empty())
+          itsCalls.at(i).DoRequest();
+          itsCalls.erase(itsCalls.begin()+i);
+        }
+        else
+        {
+          itsCalls.at(i).SetHangup(cause);
+        }
       }
     }
   }
@@ -582,11 +730,12 @@ public:
     {
      if ((itsCalls.at(i).GetTimeout() != 0)
         && (itsCalls.at(i).GetTime() != 0)
-        && (abs(cur - itsCalls.at(i).GetTime()) > ((itsCalls.at(i).GetTimeout() / 1000)+10)))
+        && (abs(int(cur - itsCalls.at(i).GetTime())) > ((itsCalls.at(i).GetTimeout() / 1000)+10)))
       {
          std::cerr << "CALL : Remove expired call = " << itsCalls.at(i).GetCampaign() << " " << itsCalls.at(i).
           GetNumber() << "  " << itsCalls.at(i).GetLeadId() << "  " << itsCalls.at(i).GetUniqueId() << "! " << std::endl;
 
+        itsCalls.at(i).DoRequest();
         itsCalls.erase(itsCalls.begin()+i);
         i--;
       }
@@ -654,7 +803,7 @@ public:
       if ((itsCalls.at(i).GetTimeout() != 0)
         && (itsCalls.at(i).GetTime() != 0))
       {
-        std::cerr << "CALL : Timeout = " << (abs(cur - itsCalls.at(i).GetTime()) ) << std::endl;
+        std::cerr << "CALL : Timeout = " << (abs(int(cur - itsCalls.at(i).GetTime())) ) << std::endl;
       }
 
     }

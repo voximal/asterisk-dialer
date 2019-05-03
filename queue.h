@@ -385,15 +385,16 @@ public:
         }
       }
     }
+
     QueueIn.close();
+
     if (nameFound == 0)
     {
-      QueueOut.open(configurationFilename.c_str(), std::ofstream::out | std::ofstream::app);
       std::
         cout << "The name " << name << " was not found so we have to create it"
         << std::endl;
-      QueueOut << "\n[" << name << "]" << std::endl;
-      QueueOut.close();
+
+      return false;
     }
 
 //  }
@@ -416,6 +417,12 @@ public:
 
 //  std::string timestamp = itos(ptm->tm_year) + "-" + itos(ptm->tm_mon) + "-" + itos(ptm->tm_mday);
   }
+
+  void WriteConfig()
+  {
+    itsAbnHelper.Write(itsName);
+  }
+
 
   void WriteAbn()
   {
@@ -732,7 +739,7 @@ public:
 
   void WriteCalls()
   {
-    itsAbnHelper.Write(itsName);
+    //itsAbnHelper.Write(itsName);
   }
 
   void AddCallsDialed(const int &calls)
@@ -747,6 +754,7 @@ public:
 
   void Write()
   {
+    std::cout << "Write configuration : " << configurationFilename << std::endl;
 
     std::stable_sort(itsMembersNumbers.begin(), itsMembersNumbers.end());
 
@@ -756,13 +764,17 @@ public:
     QueuesIn.open(configurationFilename.c_str());
 
     if (!QueuesIn.is_open())
-      std::cout << "Write failed!" << std::endl;
-
-    for (std::string tempLine;
-      tempLine.find("[" + itsName + "]", 0) == std::string::npos;)
     {
-      std::getline(QueuesIn, tempLine, '\n');
-      QueueStream << tempLine << std::endl;
+      std::cout << "Write failed!" << std::endl;
+    }
+    else
+    {
+      for (std::string tempLine;
+        tempLine.find("[" + itsName + "]", 0) == std::string::npos;)
+      {
+        std::getline(QueuesIn, tempLine, '\n');
+        QueueStream << tempLine << std::endl;
+      }
     }
 
 //  std::cout << "[" << itsName << "]" << std::endl;
@@ -808,8 +820,6 @@ public:
     {
       QueueStream << tempLine << std::endl;
     }
-
-    //QueuesIn.close();
 
     std::ofstream QueuesOut;
     QueuesOut.open(configurationFilename.c_str());
