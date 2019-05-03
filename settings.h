@@ -62,6 +62,7 @@ void addBasicSettings(std::string campaign, const char *filename = NULL)
   TheQueue.SupSetting("debug", "false");
   TheQueue.SupSetting("orderby", "attempts");
   TheQueue.SupSetting("ringonly", "false");
+  TheQueue.SupSetting("unanswered", "false");
   TheQueue.SupSetting("chanvar1", "");
   TheQueue.SupSetting("chanvar2", "");
   TheQueue.SupSetting("sipheader1", "");
