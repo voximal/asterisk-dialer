@@ -1,4 +1,4 @@
-// $Id: dialer.cpp,v 1.97 2018/12/07 09:58:15 borja.sixto Exp $
+// $Id: dialer.cpp,v 1.98 2019/06/13 20:11:14 borja.sixto Exp $
 /*
  * GnuDialer - Complete, free predictive dialer
  *
@@ -123,7 +123,7 @@ struct dispotype reasons[] = {
   {5, "5", "Remote end is busy"},
   {6, "6", "Make it go off hook"},
   {7, "7", "Line is off hook"},
-  {8, "8", "Congestion (circuits busy)"},
+  {9, "8", "Hangup"},
 };
 
 static const char *dispo2long(int dispo)
@@ -519,7 +519,7 @@ int main(int argc, char **argv)
     }
     if (arg == "-V" || arg == "--version" || arg == "-version")
     {
-      std::cout << "Asterisk Dialer version : "<<DIALERVERSION<<" (CVS:$Revision: 1.97 $) " << std::endl;
+      std::cout << "Asterisk Dialer version : "<<DIALERVERSION<<" (CVS:$Revision: 1.98 $) " << std::endl;
       return 0;
     }
     if (arg == "-s" || arg == "--safe" || arg == "-safe")
@@ -1936,7 +1936,7 @@ int main(int argc, char **argv)
                   if (!ringonly)
                   theDispo = "-3";
                   else
-                  theDispo = "7";
+                  theDispo = "8";
                   theString = "disposition='" + theDispo + "',reason='" + theReasonDesc + "'";
                   query = "UPDATE `" + theCampaign + "` SET " + theString + " WHERE id=" + theLeadid + "";     
                   if (mysql_query(mysql, query.c_str()) != 0)
@@ -2974,12 +2974,18 @@ int main(int argc, char **argv)
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {                                                          
-                theString = "disposition='6',pickups=pickups+1";
+                theString = "pickups=pickups+1";
                 query = "UPDATE `" + theCampaign + "` SET " + theString + " WHERE id=" + theLeadid + "";     
                 if (mysql_query(mysql, query.c_str()) != 0)
                 {
                   std:: cerr << "Error Updating" << std::endl;
                 }                                               
+                theString = "disposition='6'";
+                query = "UPDATE `" + theCampaign + "` SET " + theString + " WHERE id=" + theLeadid + " AND disposition != '7' AND disposition != '8'";
+                if (mysql_query(mysql, query.c_str()) != 0)
+                {
+                  std:: cerr << "Error Updating" << std::endl;
+                }
                 TheCallCache->SetAnswered(theCampaign, theLeadid);
                                     
                 if (gDebug)
@@ -3064,7 +3070,7 @@ int main(int argc, char **argv)
               if (!theCampaign.empty() && !theLeadid.empty() &&
                 TheQueues.exists(theCampaign))
               {
-                theString = "disposition='7'";
+                theString = "disposition='8'";
                 query = "UPDATE `" + theCampaign + "` SET " + theString + " WHERE id=" + theLeadid + "";     
 
                 if (mysql_query(mysql, query.c_str()) != 0)
