@@ -1,0 +1,7 @@
+channel: LOCAL/700
+MaxRetries: 0
+RetryTime: 60
+WaitTime: 300
+Context: default
+Extension: 0001
+Priority: 1
